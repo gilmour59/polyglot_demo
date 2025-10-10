@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Commerce Polyglot Demo: The Polyglot Shelf</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .explanation-card { background-color: #f0f9ff; border-left: 4px solid #38bdf8; }
+        .product-item.is-active { background-color: #eef2ff; border-left-color: #6366f1; font-weight: 600; }
+        .recommendation-card:hover { transform: translateY(-4px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05); }
+        .inspector-tab.is-active { background-color: #ffffff; border-color: #d1d5db; border-bottom-color: #ffffff; }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #e5e7eb; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+    </style>
+</head>
+<body class="text-gray-800">
+    <div id="api-error-notification" class="hidden fixed top-0 left-0 right-0 bg-red-100 border-b-2 border-red-500 text-red-700 p-4 text-center z-50">
+        <strong>API Connection Failed!</strong> Could not connect to the backend server. Please ensure `node server.js` is running and you are accessing this page from a local web server.
+        <button id="close-error-btn" class="absolute top-2 right-4 font-bold">X</button>
+    </div>
+
+    <div class="max-w-screen-xl mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="bg-white rounded-lg shadow p-6 mb-8">
+            <div class="flex justify-between items-center">
+                <h1 class="text-3xl font-bold text-gray-900">The Polyglot Shelf</h1>
+                <div id="auth-info" class="text-sm">Welcome, <strong id="current-user-name" class="text-indigo-600">...</strong>!</div>
+            </div>
+        </header>
+
+        <main class="grid lg:grid-cols-4 gap-8">
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow h-[75vh] flex flex-col">
+                    <h2 class="text-xl font-semibold p-4 border-b">Our Books</h2>
+                    <div id="product-list" class="flex-grow overflow-y-auto custom-scrollbar"></div>
+                </div>
+            </div>
+
+            <div class="lg:col-span-2">
+                <div id="product-details-container" class="bg-white rounded-lg shadow p-6"></div>
+            </div>
+
+            <div class="lg:col-span-1 space-y-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-xl font-semibold">Shopping Cart</h2>
+                    <div id="cart-items" class="text-sm my-4 space-y-2"></div>
+                    <div id="cart-total" class="text-base font-bold text-right border-t pt-2"></div>
+                    <button id="checkout-btn" class="w-full bg-green-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-green-700 transition mt-4 disabled:bg-gray-400">Checkout</button>
+                    <div class="explanation-card p-3 mt-4 rounded-md">
+                        <h4 class="font-semibold text-sky-800"><span class="font-mono text-xs">[Redis]</span> Key-Value Model</h4>
+                        <p class="text-sm text-sky-700 mt-1">Extremely fast reads/writes for temporary cart data.</p>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-xl font-semibold">Recommendations</h2>
+                    <div id="recommendations-container" class="mt-4 space-y-3"></div>
+                    <div class="explanation-card p-3 mt-4 rounded-md">
+                        <h4 class="font-semibold text-sky-800"><span class="font-mono text-xs">[Neo4j]</span> Graph Model</h4>
+                        <p class="text-sm text-sky-700 mt-1">Finds "also bought" items by traversing purchase relationships.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="mt-8 bg-white rounded-lg shadow p-6">
+            <h2 class="text-2xl font-bold text-gray-900 mb-4">Database Inspector</h2>
+            <div class="border-b border-gray-200">
+                <nav id="inspector-tabs" class="-mb-px flex space-x-6" aria-label="Tabs">
+                    <!-- Tabs will be inserted by JS -->
+                </nav>
+            </div>
+            <div id="inspector-content" class="mt-4 bg-gray-900 text-white text-xs font-mono p-4 rounded-md h-64 overflow-auto custom-scrollbar">
+                <pre>Select a database tab and click "Refresh" to see live data.</pre>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:3000';
+        
+        let USER_ID = null;
+        let selectedProductId = null;
+        let productsCache = [];
+        let activeInspectorTabName = 'PostgreSQL'; // State for the inspector tab
+        const errorNotification = document.getElementById('api-error-notification');
+
+        // --- API Fetch Wrapper ---
+        async function apiFetch(endpoint, options = {}) {
+            try {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const text = await response.text();
+                return text ? JSON.parse(text) : undefined;
+            } catch (error) {
+                console.error(`Failed to fetch or parse JSON from ${endpoint}:`, error);
+                errorNotification.classList.remove('hidden');
+                throw error;
+            }
+        }
+        
+        // --- User Management ---
+        function getOrCreateUser() {
+            let userId = localStorage.getItem('polyglotUserId');
+            let userName = localStorage.getItem('polyglotUserName');
+
+            if (!userId) {
+                userId = `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+                userName = `Visitor #${Math.floor(Math.random() * 10000)}`;
+                localStorage.setItem('polyglotUserId', userId);
+                localStorage.setItem('polyglotUserName', userName);
+            }
+            USER_ID = userId;
+            return { id: userId, name: userName };
+        }
+
+        // --- Data Fetching Functions ---
+        async function setupUser(user) {
+            try {
+                const savedUser = await apiFetch(`/api/users/find-or-create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(user)
+                });
+                document.getElementById('current-user-name').textContent = savedUser.name;
+            } catch (error) {
+                console.error('Could not set up user. Is the API server running?', error);
+            }
+        }
+
+        async function fetchProducts() {
+            try {
+                productsCache = await apiFetch('/api/products');
+                renderProductList(productsCache);
+            } catch (error) {
+                document.getElementById('product-list').innerHTML = '<div class="p-4 text-red-600">Failed to load products.</div>';
+            }
+        }
+
+        async function fetchCart() {
+            if (!USER_ID) return;
+            try {
+                const cart = await apiFetch(`/api/cart/${USER_ID}`);
+                renderCart(cart.items || {});
+            } catch (error) {
+                console.error('Failed to fetch cart:', error);
+            }
+        }
+
+        async function fetchReviews(productId) {
+            try {
+                const reviews = await apiFetch(`/api/reviews/${productId}`);
+                renderReviews(reviews);
+            } catch (error) {
+                console.error('Failed to fetch reviews:', error);
+            }
+        }
+
+        async function fetchRecommendations(productId) {
+            try {
+                const recommendations = await apiFetch(`/api/recommendations/${productId}`);
+                renderRecommendations(recommendations);
+            } catch(error) {
+                console.error('Failed to fetch recommendations:', error);
+            }
+        }
+
+        // --- Core Application Logic & Actions ---
+        function selectProduct(product) {
+            selectedProductId = product.id;
+            renderProductList(productsCache);
+            renderProductDetails(product);
+            fetchReviews(product.id);
+            fetchRecommendations(product.id);
+        }
+
+        async function addToCart(product) {
+            await apiFetch(`/api/cart/${USER_ID}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ productId: product.id, title: product.title, price: product.price })
+            });
+            fetchCart();
+        }
+
+        async function submitReview(productId) {
+            const userName = document.getElementById('review-user-name').value;
+            const text = document.getElementById('review-text').value;
+            if (!userName || !text) { alert('Please enter your name and a review.'); return; }
+            await apiFetch(`/api/reviews/${productId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userName, text })
+            });
+            document.getElementById('review-user-name').value = '';
+            document.getElementById('review-text').value = '';
+            fetchReviews(productId);
+        }
+
+        async function checkout() {
+            await apiFetch(`/api/checkout/${USER_ID}`, { method: 'POST' });
+            alert('Checkout successful! Purchase relationships created in Neo4j.');
+            fetchCart();
+        }
+
+        // --- UI Rendering ---
+        function renderProductList(products) {
+            const listEl = document.getElementById('product-list');
+            listEl.innerHTML = '';
+            products.forEach(p => {
+                const item = document.createElement('div');
+                item.className = `p-4 border-b border-l-4 cursor-pointer hover:bg-gray-50 product-item ${p.id === selectedProductId ? 'is-active' : ''}`;
+                item.innerHTML = `<span>${p.title}</span>`;
+                item.onclick = () => selectProduct(p);
+                listEl.appendChild(item);
+            });
+        }
+        
+        function renderProductDetails(product) {
+            const container = document.getElementById('product-details-container');
+            if (!product || !product.id) {
+                 container.innerHTML = `<div class="text-center text-gray-500 py-16"><h3 class="text-lg font-medium text-gray-900">Select a Book</h3><p class="mt-1 text-sm">Choose a book from the list to see its details, reviews, and recommendations.</p></div>`;
+                 return;
+            }
+            container.innerHTML = `
+                <img src="${product.imageUrl}" alt="${product.title}" class="w-full h-64 object-cover rounded-t-lg mb-4">
+                <div class="px-2">
+                    <h2 class="text-2xl font-bold">${product.title}</h2>
+                    <h3 class="text-md text-gray-600">by ${product.author}</h3>
+                    <p class="text-2xl font-semibold my-4">$${product.price.toFixed(2)}</p>
+                    <button id="add-to-cart-btn" class="w-full bg-indigo-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-indigo-700 transition">Add to Cart</button>
+                    <div class="explanation-card p-3 mt-6 rounded-md"><h4 class="font-semibold text-sky-800"><span class="font-mono text-xs">[MongoDB]</span> Document Model</h4><p class="text-sm text-sky-700 mt-1">Flexible schema for varied product attributes.</p></div>
+                </div>
+                <div class="px-2 mt-6">
+                    <h3 class="text-xl font-semibold">Reviews</h3>
+                    <div id="reviews-list" class="mt-4 space-y-3"></div>
+                    <div class="mt-4 border-t pt-4">
+                        <h4 class="font-semibold mb-2">Leave a Review</h4>
+                        <input id="review-user-name" class="w-full p-2 border rounded-md mb-2" placeholder="Your Name" value="${localStorage.getItem('polyglotUserName') || ''}">
+                        <textarea id="review-text" class="w-full p-2 border rounded-md" placeholder="Your review..."></textarea>
+                        <button id="submit-review-btn" class="w-full bg-blue-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-600 transition mt-2">Submit Review</button>
+                    </div>
+                    <div class="explanation-card p-3 mt-4 rounded-md"><h4 class="font-semibold text-sky-800"><span class="font-mono text-xs">[Cassandra]</span> Wide-Column Model</h4><p class="text-sm text-sky-700 mt-1">Optimized for high-volume, write-heavy review data.</p></div>
+                </div>
+            `;
+            document.getElementById('add-to-cart-btn').onclick = () => addToCart(product);
+            document.getElementById('submit-review-btn').onclick = () => submitReview(product.id);
+        }
+
+        function renderCart(cartItems) {
+            const itemsEl = document.getElementById('cart-items');
+            const totalEl = document.getElementById('cart-total');
+            const checkoutBtn = document.getElementById('checkout-btn');
+            itemsEl.innerHTML = '';
+            let total = 0;
+            const hasItems = Object.keys(cartItems).length > 0;
+
+            checkoutBtn.disabled = !hasItems;
+            if (!hasItems) {
+                itemsEl.innerHTML = '<p class="text-gray-500">Your cart is empty.</p>';
+                totalEl.innerHTML = '';
+                return;
+            }
+            for (const item of Object.values(cartItems)) {
+                const itemEl = document.createElement('div');
+                itemEl.className = 'flex justify-between items-center';
+                itemEl.innerHTML = `<div>${item.quantity} x ${item.title}</div><div class="font-medium">$${(item.quantity * item.price).toFixed(2)}</div>`;
+                itemsEl.appendChild(itemEl);
+                total += item.quantity * item.price;
+            }
+            totalEl.textContent = `Total: $${total.toFixed(2)}`;
+        }
+
+        function renderReviews(reviews) {
+            const listEl = document.getElementById('reviews-list');
+            listEl.innerHTML = !reviews.length ? '<p class="text-sm text-gray-500">No reviews yet.</p>' : '';
+            reviews.forEach(r => {
+                listEl.innerHTML += `<div class="bg-gray-50 p-3 rounded-lg border"><p class="text-sm"><strong class="font-semibold">${r.user_name}:</strong> ${r.text}</p></div>`;
+            });
+        }
+        
+        function renderRecommendations(recs) {
+            const container = document.getElementById('recommendations-container');
+            container.innerHTML = !recs.length ? '<p class="text-sm text-gray-500">No recommendations yet. Checkout to create purchase history.</p>' : '';
+            recs.forEach(rec => {
+                const p = productsCache.find(prod => prod.id === rec.id);
+                if (!p) return;
+                const card = document.createElement('div');
+                card.className = 'bg-white p-3 rounded-lg border flex items-center cursor-pointer recommendation-card transition';
+                card.innerHTML = `<img src="${p.imageUrl}" alt="${p.title}" class="w-12 h-12 object-cover rounded-md mr-3"><div><p class="font-semibold text-sm leading-tight">${p.title}</p><p class="text-xs text-gray-500">by ${p.author}</p></div>`;
+                card.onclick = () => selectProduct(p);
+                container.appendChild(card);
+            });
+        }
+        
+        function renderInspector() {
+            const inspectorTabs = [
+                { name: 'PostgreSQL', endpoint: '/api/admin/postgres' }, { name: 'MongoDB', endpoint: '/api/admin/mongodb' },
+                { name: 'Redis', endpoint: `/api/admin/redis/${USER_ID}` }, { name: 'Cassandra', endpoint: '/api/admin/cassandra' },
+                { name: 'Neo4j', endpoint: '/api/admin/neo4j' },
+            ];
+            const activeInspectorTab = inspectorTabs.find(t => t.name === activeInspectorTabName) || inspectorTabs[0];
+
+            const tabsContainer = document.getElementById('inspector-tabs');
+            tabsContainer.innerHTML = '';
+            inspectorTabs.forEach(tab => {
+                const isActive = tab.name === activeInspectorTab.name;
+                const tabEl = document.createElement('a');
+                tabEl.className = `whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm cursor-pointer inspector-tab ${isActive ? 'is-active border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`;
+                tabEl.textContent = tab.name;
+                tabEl.onclick = () => { 
+                    activeInspectorTabName = tab.name; 
+                    renderInspector(); 
+                    document.getElementById('inspector-content').innerHTML = '<pre>Click "Refresh" to see live data.</pre>'; 
+                };
+                tabsContainer.appendChild(tabEl);
+            });
+            const refreshButton = document.createElement('button');
+            refreshButton.className = 'ml-auto bg-gray-200 text-gray-700 px-3 py-1 rounded-md text-sm font-semibold hover:bg-gray-300';
+            refreshButton.textContent = 'Refresh';
+            refreshButton.onclick = async () => {
+                const contentEl = document.getElementById('inspector-content');
+                contentEl.innerHTML = '<pre>Loading...</pre>';
+                try {
+                    const data = await apiFetch(activeInspectorTab.endpoint);
+                    contentEl.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                } catch(e) { contentEl.innerHTML = `<pre class="text-red-400">Failed to load data.</pre>`; }
+            };
+            tabsContainer.appendChild(refreshButton);
+        }
+
+        async function initializeApp() {
+             try {
+                const user = getOrCreateUser();
+                await setupUser(user);
+                await fetchProducts();
+                await fetchCart();
+                renderInspector(); // Re-render inspector to get correct Redis URL
+            } catch(e) { /* error already handled */ }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('close-error-btn').onclick = () => errorNotification.classList.add('hidden');
+            document.getElementById('checkout-btn').onclick = checkout;
+            renderProductDetails(); // Initial render for placeholder
+            initializeApp();
+        });
+    </script>
+</body>
+</html>
+
