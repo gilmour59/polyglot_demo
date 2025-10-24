@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BI Dashboard - The Polyglot Shelf</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .stat-card {
+            background-color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            padding: 1.5rem;
+        }
+    </style>
+</head>
+<body class="text-gray-800">
+    <div class="max-w-screen-xl mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="bg-white rounded-lg shadow p-6 mb-8 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Business Intelligence Dashboard</h1>
+                <p class="text-gray-600 mt-1">Analytics powered by our PostgreSQL Data Warehouse</p>
+            </div>
+            <a href="./ecommerce_poly_app.html" class="text-indigo-600 hover:underline">&larr; Back to Store</a>
+        </header>
+
+        <div class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 rounded-md mb-8" role="alert">
+            <p class="font-bold">How to use this dashboard:</p>
+            <p>1. Go back to the store and have users "Checkout" items to generate data.</p>
+            <p>2. Click the "Run ETL Process" button below to update the data warehouse.</p>
+            <p>3. The charts and stats will refresh with the latest analytical data.</p>
+        </div>
+
+        <div classs="mb-8 text-center">
+            <button id="run-etl-btn" class="bg-indigo-600 text-white font-semibold py-3 px-6 rounded-md hover:bg-indigo-700 transition-all text-lg">
+                Run ETL Process (Update Warehouse)
+            </button>
+            <div id="etl-status" class="text-sm mt-2 text-gray-500"></div>
+        </div>
+
+        <main class="mt-8">
+            <!-- KPI Stat Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="stat-card">
+                    <h3 class="text-sm font-medium text-gray-500 truncate">Total Revenue</h3>
+                    <p id="kpi-revenue" class="mt-1 text-3xl font-semibold text-gray-900">$0.00</p>
+                </div>
+                <div class="stat-card">
+                    <h3 class="text-sm font-medium text-gray-500 truncate">Total Units Sold</h3>
+                    <p id="kpi-sales" class="mt-1 text-3xl font-semibold text-gray-900">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3 class="text-sm font-medium text-gray-500 truncate">Total Customers</h3>
+                    <p id="kpi-customers" class="mt-1 text-3xl font-semibold text-gray-900">0</p>
+                </div>
+            </div>
+            
+            <!-- Charts -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-xl font-semibold">Total Sales by Product</h2>
+                    <div class="mt-4">
+                        <canvas id="salesByProductChart"></canvas>
+                    </div>
+                </div>
+                 <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-xl font-semibold">Top 5 Customers</h2>
+                    <div class="mt-4">
+                        <canvas id="topCustomersChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-xl font-semibold">Sales Over Time</h2>
+                <div class="mt-4">
+                    <canvas id="salesOverTimeChart"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:3000';
+        let salesChart, timeChart, customerChart;
+
+        async function runETL() {
+            const etlBtn = document.getElementById('run-etl-btn');
+            const etlStatus = document.getElementById('etl-status');
+            
+            etlBtn.disabled = true;
+            etlBtn.textContent = 'Running ETL...';
+            etlStatus.textContent = 'Extracting, Transforming, and Loading data...';
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/admin/run-etl`, { method: 'POST' });
+                if (!response.ok) throw new Error('ETL process failed');
+                etlStatus.textContent = 'Data warehouse updated successfully!';
+                loadAnalyticsData(); // Refresh charts after ETL
+            } catch (error) {
+                console.error(error);
+                etlStatus.textContent = 'Error during ETL process. Check server logs.';
+            } finally {
+                etlBtn.disabled = false;
+                etlBtn.textContent = 'Run ETL Process (Update Warehouse)';
+            }
+        }
+
+        async function loadAnalyticsData() {
+            try {
+                // Fetch all analytics data in parallel
+                const [kpiData, salesData, timeData, customerData] = await Promise.all([
+                    fetch(`${API_BASE_URL}/api/analytics/kpis`).then(res => res.json()),
+                    fetch(`${API_BASE_URL}/api/analytics/sales-by-product`).then(res => res.json()),
+                    fetch(`${API_BASE_URL}/api/analytics/sales-over-time`).then(res => res.json()),
+                    fetch(`${API_BASE_URL}/api/analytics/top-customers`).then(res => res.json())
+                ]);
+
+                // Render all components
+                renderKpis(kpiData);
+                renderSalesByProductChart(salesData);
+                renderSalesOverTimeChart(timeData);
+                renderTopCustomersChart(customerData);
+
+            } catch (error) {
+                console.error('Failed to load analytics data', error);
+            }
+        }
+
+        function renderKpis(data) {
+            document.getElementById('kpi-revenue').textContent = `$${parseFloat(data.total_revenue).toFixed(2)}`;
+            document.getElementById('kpi-sales').textContent = data.total_sales;
+            document.getElementById('kpi-customers').textContent = data.total_customers;
+        }
+
+        function renderSalesByProductChart(data) {
+            const ctx = document.getElementById('salesByProductChart').getContext('2d');
+            const labels = data.map(item => item.title);
+            const values = data.map(item => item.sales_count);
+
+            if(salesChart) salesChart.destroy();
+
+            salesChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Number of Sales',
+                        data: values,
+                        backgroundColor: 'rgba(79, 70, 229, 0.8)',
+                        borderColor: 'rgba(79, 70, 229, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                    responsive: true,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function renderSalesOverTimeChart(data) {
+            const ctx = document.getElementById('salesOverTimeChart').getContext('2d');
+            const labels = data.map(item => new Date(item.purchase_date).toLocaleDateString());
+            const values = data.map(item => item.sales_count);
+
+            if(timeChart) timeChart.destroy();
+
+            timeChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Sales per Day',
+                        data: values,
+                        fill: false,
+                        borderColor: 'rgba(22, 163, 74, 1)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                    responsive: true,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function renderTopCustomersChart(data) {
+            const ctx = document.getElementById('topCustomersChart').getContext('2d');
+            const labels = data.map(item => item.name);
+            const values = data.map(item => item.purchase_count);
+
+            if(customerChart) customerChart.destroy();
+
+            customerChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Number of Purchases',
+                        data: values,
+                        backgroundColor: 'rgba(217, 70, 239, 0.8)',
+                        borderColor: 'rgba(217, 70, 239, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    indexAxis: 'y', // This makes it a horizontal bar chart
+                    scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                    responsive: true,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('run-etl-btn').addEventListener('click', runETL);
+            loadAnalyticsData(); // Load initial data on page load
+        });
+    </script>
+</body>
+</html>
+

@@ -9,7 +9,7 @@ app.use(express.json());
 
 const PORT = 3000;
 
-// --- API Endpoints ---
+// --- OLTP API Endpoints (from previous steps) ---
 
 // 1. Get or Create User (from PostgreSQL)
 app.post('/api/users/find-or-create', async (req, res) => {
@@ -190,6 +190,168 @@ app.get('/api/admin/neo4j', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     } finally {
         await session.close();
+    }
+});
+
+// --- OLAP / Data Warehouse Endpoints ---
+
+// This endpoint simulates an ETL (Extract, Transform, Load) process.
+app.post('/api/admin/run-etl', async (req, res) => {
+    console.log('Starting ETL process...');
+    const pgClient = await postgresPool.connect(); // Use a single client for the transaction
+
+    try {
+        await pgClient.query('BEGIN'); // Start transaction
+
+        // 1. CREATE WAREHOUSE TABLES (Star Schema)
+        console.log('  - Ensuring data warehouse tables exist...');
+        await pgClient.query(`
+            CREATE TABLE IF NOT EXISTS dim_users (
+                user_key SERIAL PRIMARY KEY,
+                user_id VARCHAR(255) UNIQUE,
+                name VARCHAR(255)
+            );
+            CREATE TABLE IF NOT EXISTS dim_products (
+                product_key SERIAL PRIMARY KEY,
+                product_id VARCHAR(255) UNIQUE,
+                title VARCHAR(255),
+                author VARCHAR(255),
+                price NUMERIC(10, 2)
+            );
+            CREATE TABLE IF NOT EXISTS fact_purchases (
+                purchase_id SERIAL PRIMARY KEY,
+                user_key INTEGER REFERENCES dim_users(user_key),
+                product_key INTEGER REFERENCES dim_products(product_key),
+                purchase_date DATE NOT NULL -- Removed DEFAULT
+            );
+        `);
+
+        // 2. EXTRACT data from operational databases
+        console.log('  - Extracting data from source databases...');
+        const users = (await pgClient.query('SELECT id, name FROM users')).rows;
+        const products = await mongoClient.db('polyglot_shelf').collection('products').find({}).toArray();
+        const neo4jSession = neo4jDriver.session({ database: 'neo4j' });
+        const purchaseRelations = (await neo4jSession.run(`MATCH (u:User)-[:PURCHASED]->(p:Product) RETURN u.id AS userId, p.id AS productId`)).records;
+        await neo4jSession.close();
+
+        // 3. TRANSFORM AND LOAD into warehouse tables
+        console.log('  - Transforming and Loading data into warehouse...');
+        
+        // Truncate for simplicity in a demo environment
+        await pgClient.query('TRUNCATE dim_users, dim_products, fact_purchases RESTART IDENTITY CASCADE');
+
+        // Load Dimensions
+        for (const user of users) {
+            await pgClient.query('INSERT INTO dim_users (user_id, name) VALUES ($1, $2)', [user.id, user.name]);
+        }
+        for (const product of products) {
+            await pgClient.query('INSERT INTO dim_products (product_id, title, author, price) VALUES ($1, $2, $3, $4)', [product._id, product.title, product.author, product.price]);
+        }
+
+        // Load Facts
+        for (const record of purchaseRelations) {
+            const userId = record.get('userId');
+            const productId = record.get('productId');
+            
+            // ** THE FIX IS HERE **
+            // Simulate a random purchase date within the last 7 days
+            const randomDaysAgo = Math.floor(Math.random() * 7);
+            const purchaseDate = new Date();
+            purchaseDate.setDate(purchaseDate.getDate() - randomDaysAgo);
+
+            await pgClient.query(`
+                INSERT INTO fact_purchases (user_key, product_key, purchase_date)
+                SELECT du.user_key, dp.product_key, $3
+                FROM dim_users du, dim_products dp
+                WHERE du.user_id = $1 AND dp.product_id = $2
+            `, [userId, productId, purchaseDate]);
+        }
+
+        await pgClient.query('COMMIT'); // Commit transaction
+        console.log('✅ ETL process completed successfully!');
+        res.status(200).json({ message: 'ETL process completed successfully!' });
+    } catch (err) {
+        await pgClient.query('ROLLBACK'); // Rollback on error
+        console.error('🔥 ETL process failed:', err);
+        res.status(500).json({ error: 'ETL process failed' });
+    } finally {
+        pgClient.release();
+    }
+});
+
+// --- NEW ANALYTICS ENDPOINTS ---
+
+// Endpoint to get KPIs
+app.get('/api/analytics/kpis', async (req, res) => {
+    try {
+        const result = await postgresPool.query(`
+            SELECT
+                COALESCE(SUM(dp.price), 0) AS total_revenue,
+                COALESCE(COUNT(fp.purchase_id), 0) AS total_sales,
+                COALESCE(COUNT(DISTINCT fp.user_key), 0) AS total_customers
+            FROM fact_purchases fp
+            LEFT JOIN dim_products dp ON fp.product_key = dp.product_key;
+        `);
+        // Note: We use LEFT JOIN and COALESCE to return 0 instead of NULL if no sales exist
+        res.json(result.rows[0]);
+    } catch(err) {
+        console.error('Error fetching KPIs:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Endpoint to get sales by product (existing)
+app.get('/api/analytics/sales-by-product', async (req, res) => {
+    try {
+        const result = await postgresPool.query(`
+            SELECT dp.title, COUNT(fp.purchase_id) AS sales_count
+            FROM fact_purchases fp
+            JOIN dim_products dp ON fp.product_key = dp.product_key
+            GROUP BY dp.title
+            ORDER BY sales_count DESC;
+        `);
+        res.json(result.rows);
+    } catch(err) {
+        console.error('Error fetching sales by product:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Endpoint to get sales over time
+app.get('/api/analytics/sales-over-time', async (req, res) => {
+    try {
+        const result = await postgresPool.query(`
+            SELECT 
+                purchase_date,
+                COUNT(purchase_id) AS sales_count
+            FROM fact_purchases
+            GROUP BY purchase_date
+            ORDER BY purchase_date ASC;
+        `);
+        res.json(result.rows);
+    } catch(err) {
+        console.error('Error fetching sales over time:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Endpoint to get top customers
+app.get('/api/analytics/top-customers', async (req, res) => {
+    try {
+        const result = await postgresPool.query(`
+            SELECT 
+                du.name,
+                COUNT(fp.purchase_id) AS purchase_count
+            FROM fact_purchases fp
+            JOIN dim_users du ON fp.user_key = du.user_key
+            GROUP BY du.name
+            ORDER BY purchase_count DESC
+            LIMIT 5;
+        `);
+        res.json(result.rows);
+    } catch(err) {
+        console.error('Error fetching top customers:', err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
