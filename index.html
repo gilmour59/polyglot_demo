@@ -80,7 +80,7 @@
     </div>
 
     <script>
-        const API_BASE_URL = 'http://localhost:3000';
+        const API_BASE_URL = 'http://192.168.8.125:3000';
         
         let USER_ID = null;
         let selectedProductId = null;
@@ -230,6 +230,7 @@
                 <div class="px-2">
                     <h2 class="text-2xl font-bold">${product.title}</h2>
                     <h3 class="text-md text-gray-600">by ${product.author}</h3>
+                    ${product.series_name ? `<p class="text-sm text-gray-500 mt-1"><em>Part of the "${product.series_name}" series (Book ${product.series_number})</em></p>` : ''}
                     <p class="text-2xl font-semibold my-4">$${product.price.toFixed(2)}</p>
                     <button id="add-to-cart-btn" class="w-full bg-indigo-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-indigo-700 transition">Add to Cart</button>
                     <div class="explanation-card p-3 mt-6 rounded-md"><h4 class="font-semibold text-sky-800"><span class="font-mono text-xs">[MongoDB]</span> Document Model</h4><p class="text-sm text-sky-700 mt-1">Flexible schema for varied product attributes.</p></div>
@@ -351,4 +352,5 @@
     </script>
 </body>
 </html>
+
 

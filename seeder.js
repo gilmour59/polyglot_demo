@@ -1,23 +1,42 @@
 // seed.js
-// This script populates all five databases with initial data.
+// This script populates the databases with initial data.
 // Run it once from your terminal: `node seed.js`
 
-const { postgresPool, mongoClient, redisClient, neo4jDriver } = require('./db-clients');
 const cassandra = require('cassandra-driver');
+const { mongoClient, postgresPool, redisClient, cassandraClient, neo4jDriver } = require('./db-clients');
 
-// --- Sample Data ---
+// --- 1. MongoDB: Demonstrating Flexibility ---
+// Notice the 4th book has two extra fields: `series_name` and `series_number`.
+// MongoDB handles this flexible schema without any issues.
 const sampleProducts = [
     { _id: "prod_1", title: "Designing Data-Intensive Applications", author: "Martin Kleppmann", price: 45.99, imageUrl: "https://placehold.co/600x400/3273dc/ffffff?text=DDI" },
     { _id: "prod_2", title: "Building Microservices", author: "Sam Newman", price: 39.99, imageUrl: "https://placehold.co/600x400/23d160/ffffff?text=Microservices" },
-    { _id: "prod_3", title: "Fundamentals of Data Engineering", author: "Joe Reis & Matt Housley", price: 55.00, imageUrl: "https://placehold.co/600x400/ffdd57/000000?text=FDE" }
+    { _id: "prod_3", title: "Fundamentals of Data Engineering", author: "Joe Reis & Matt Housley", price: 55.00, imageUrl: "https://placehold.co/600x400/ffdd57/000000?text=FDE" },
+    { _id: "prod_4", title: "Clean Architecture", author: "Robert C. Martin", price: 35.50, imageUrl: "https://placehold.co/600x400/f14668/ffffff?text=Clean+Arch", series_name: "Robert C. Martin Series", series_number: 1 }
 ];
-const sampleUser = { id: 'user-123-demo', name: 'Demo User' };
 
-// --- Seeding Functions ---
+// --- 2. Cassandra: Demonstrating Denormalization ---
+// We are intentionally storing `user_name` here. In a relational model, you'd only store
+// `user_id` and perform a JOIN. Here, we duplicate the name to make reads faster.
+const sampleReviews = {
+    "prod_1": [ { productId: "prod_1", userName: "Alex", text: "A must-read for any software engineer." } ],
+    "prod_2": [ { productId: "prod_2", userName: "Brenda", text: "Great practical advice." } ]
+};
+
+// --- 3. Neo4j: The initial state of our graph ---
+// We create some initial purchase relationships to power the recommendation engine.
+const samplePurchases = [
+    { userId: 'user-alex-demo', productId: 'prod_1' },
+    { userId: 'user-alex-demo', productId: 'prod_3' }, // Alex bought prod_1 and prod_3
+    { userId: 'user-brenda-demo', productId: 'prod_1' },
+    { userId: 'user-brenda-demo', productId: 'prod_3' }, // Brenda also bought prod_1 and prod_3
+    { userId: 'user-chris-demo', productId: 'prod_2' },
+];
+
 
 async function seedPostgres() {
     console.log('Seeding PostgreSQL...');
-    await postgresPool.query('DROP TABLE IF EXISTS users;');
+    await postgresPool.query(`DROP TABLE IF EXISTS users;`);
     await postgresPool.query(`
         CREATE TABLE users (
             id VARCHAR(255) PRIMARY KEY,
@@ -25,8 +44,18 @@ async function seedPostgres() {
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
     `);
-    await postgresPool.query('INSERT INTO users (id, name) VALUES ($1, $2)', [sampleUser.id, sampleUser.name]);
-    console.log('  - "users" table created and seeded.\n');
+    console.log('  - "users" table created.');
+
+    const initialUsers = [
+        ['user-alex-demo', 'Alex'],
+        ['user-brenda-demo', 'Brenda'],
+        ['user-chris-demo', 'Chris']
+    ];
+    for (const user of initialUsers) {
+        await postgresPool.query('INSERT INTO users (id, name) VALUES ($1, $2)', user);
+    }
+    console.log(`  - Inserted ${initialUsers.length} initial users.`);
+    console.log('PostgreSQL seeding complete.\n');
 }
 
 async function seedMongo() {
@@ -34,69 +63,92 @@ async function seedMongo() {
     const db = mongoClient.db('polyglot_shelf');
     await db.collection('products').deleteMany({});
     await db.collection('products').insertMany(sampleProducts);
-    console.log(`  - "products" collection seeded with ${sampleProducts.length} items.\n`);
-}
-
-async function seedRedis() {
-    console.log('Seeding Redis...');
-    await redisClient.del(`cart:${sampleUser.id}`);
-    console.log('  - Cleared stale cart data.\n');
+    console.log(`  - Inserted ${sampleProducts.length} products (including one with a flexible schema).`);
+    console.log('MongoDB seeding complete.\n');
 }
 
 async function seedCassandra() {
     console.log('Seeding Cassandra...');
-    // Special client to connect *without* a keyspace to create it first.
     const tempClient = new cassandra.Client({
         contactPoints: ['127.0.0.1'],
         localDataCenter: 'datacenter1',
-        protocolOptions: { port: 9042 }
+        credentials: { username: 'cassandra', password: 'cassandra' }
     });
+    
+    // Create the keyspace if it doesn't exist
+    await tempClient.execute(`
+        CREATE KEYSPACE IF NOT EXISTS polyglot_shelf 
+        WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1' }
+    `);
+    await tempClient.shutdown();
+    console.log('  - "polyglot_shelf" keyspace ensured.');
 
-    try {
-        await tempClient.connect();
-        // Use a simple strategy for a single-node dev setup
-        await tempClient.execute(`
-            CREATE KEYSPACE IF NOT EXISTS polyglot_shelf 
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}`
-        );
-        console.log('  - "polyglot_shelf" keyspace ensured.');
+    // Drop the table first to ensure a clean schema on every run
+    await cassandraClient.execute(`DROP TABLE IF EXISTS polyglot_shelf.reviews`);
 
-        await tempClient.execute(`
-            CREATE TABLE IF NOT EXISTS polyglot_shelf.reviews (
-                product_id TEXT,
-                review_id TIMEUUID,
-                user_name TEXT,
-                text TEXT,
-                PRIMARY KEY (product_id, review_id)
-            ) WITH CLUSTERING ORDER BY (review_id DESC);
-        `);
-        console.log('  - "reviews" table ensured.');
-
-    } finally {
-        await tempClient.shutdown();
+    // Now (re)create the table with the correct schema
+    await cassandraClient.execute(`
+        CREATE TABLE polyglot_shelf.reviews (
+            product_id TEXT,
+            review_id UUID,
+            user_name TEXT,
+            text TEXT,
+            created_at TIMESTAMP,
+            PRIMARY KEY (product_id, created_at)
+        ) WITH CLUSTERING ORDER BY (created_at DESC);
+    `);
+    console.log('  - "reviews" table ensured.');
+    
+    // Clear the table and insert new data
+    await cassandraClient.execute('TRUNCATE polyglot_shelf.reviews');
+    const allReviews = Object.values(sampleReviews).flat();
+    for (const review of allReviews) {
+        const query = 'INSERT INTO polyglot_shelf.reviews (product_id, review_id, user_name, text, created_at) VALUES (?, uuid(), ?, ?, toTimestamp(now()))';
+        await cassandraClient.execute(query, [review.productId, review.userName, review.text], { prepare: true });
     }
+    console.log(`  - Inserted ${allReviews.length} reviews.`);
     console.log('Cassandra seeding complete.\n');
+}
+
+
+async function seedRedis() {
+    console.log('Seeding Redis...');
+    const keys = await redisClient.keys('cart:*');
+    if (keys.length > 0) {
+        await redisClient.del(keys);
+        console.log(`  - Cleared ${keys.length} stale cart(s).`);
+    } else {
+        console.log('  - No stale carts to clear.');
+    }
+    console.log('Redis seeding complete.\n');
 }
 
 async function seedNeo4j() {
     console.log('Seeding Neo4j...');
     const session = neo4jDriver.session({ database: 'neo4j' });
     try {
-        await session.run('MATCH (n) DETACH DELETE n'); // Clear the database
+        await session.run('MATCH (n) DETACH DELETE n');
         console.log('  - Cleared existing graph data.');
-
-        await session.run('CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE');
-        await session.run('CREATE CONSTRAINT product_id IF NOT EXISTS FOR (p:Product) REQUIRE p.id IS UNIQUE');
-        console.log('  - Ensured constraints on User and Product nodes.');
         
-        // Create the user node
-        await session.run('CREATE (u:User {id: $id, name: $name})', sampleUser);
-
         // Create product nodes
-        for (const product of sampleProducts) {
-             await session.run('CREATE (p:Product {id: $id, title: $title})', { id: product._id, title: product.title });
-        }
-        console.log('  - Created User and Product nodes.');
+        const productIds = sampleProducts.map(p => p._id);
+        await session.run(
+            `UNWIND $productIds AS pId MERGE (p:Product {id: pId})`,
+            { productIds }
+        );
+        console.log(`  - Created ${productIds.length} product nodes.`);
+
+        // Create user nodes and purchase relationships
+        await session.run(
+            `
+            UNWIND $purchases AS purchase
+            MERGE (u:User {id: purchase.userId})
+            MERGE (p:Product {id: purchase.productId})
+            MERGE (u)-[:PURCHASED]->(p)
+            `,
+            { purchases: samplePurchases }
+        );
+        console.log(`  - Created ${samplePurchases.length} purchase relationships.`);
 
     } finally {
         await session.close();
@@ -104,16 +156,18 @@ async function seedNeo4j() {
     console.log('Neo4j seeding complete.\n');
 }
 
+
 async function main() {
     try {
         await mongoClient.connect();
         await redisClient.connect();
-        console.log('Connected to ancillary databases.\n');
+        // Cassandra and Neo4j connect inside their seed functions
+        console.log('Mongo and Redis clients connected successfully.\n');
 
         await seedPostgres();
         await seedMongo();
-        await seedRedis();
         await seedCassandra();
+        await seedRedis();
         await seedNeo4j();
 
         console.log('✅ All databases have been successfully seeded!');
@@ -124,10 +178,12 @@ async function main() {
         await postgresPool.end();
         await mongoClient.close();
         await redisClient.quit();
+        await cassandraClient.shutdown();
         await neo4jDriver.close();
         console.log('\nAll database clients disconnected.');
     }
 }
 
 main();
+
 
