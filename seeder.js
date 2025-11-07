@@ -6,37 +6,62 @@ const cassandra = require('cassandra-driver');
 const { mongoClient, postgresPool, redisClient, cassandraClient, neo4jDriver } = require('./db-clients');
 
 // --- 1. MongoDB: Demonstrating Flexibility ---
-// Notice the 4th book has two extra fields: `series_name` and `series_number`.
-// MongoDB handles this flexible schema without any issues.
+// Updated to 20 book titles, all "deez nuts" jokes.
 const sampleProducts = [
-    { _id: "prod_1", title: "Designing Data-Intensive Applications", author: "Martin Kleppmann", price: 45.99, imageUrl: "https://placehold.co/600x400/3273dc/ffffff?text=DDI" },
-    { _id: "prod_2", title: "Building Microservices", author: "Sam Newman", price: 39.99, imageUrl: "https://placehold.co/600x400/23d160/ffffff?text=Microservices" },
-    { _id: "prod_3", title: "Fundamentals of Data Engineering", author: "Joe Reis & Matt Housley", price: 55.00, imageUrl: "https://placehold.co/600x400/ffdd57/000000?text=FDE" },
-    { _id: "prod_4", title: "Clean Architecture", author: "Robert C. Martin", price: 35.50, imageUrl: "https://placehold.co/600x400/f14668/ffffff?text=Clean+Arch", series_name: "Robert C. Martin Series", series_number: 1 }
+    { _id: "dn_prod_1", title: "The Grapes of Sawkon", author: "Jon Steinbofades", price: 19.99, imageUrl: "https://placehold.co/600x400/3273dc/ffffff?text=Sawkon" },
+    { _id: "dn_prod_2", title: "Lord of the Deez: The Fellowship of the Nuts", author: "J.R.R. Holden", price: 22.99, imageUrl: "https://placehold.co/600x400/23d160/ffffff?text=Lord+of+Deez" },
+    { _id: "dn_prod_3", title: "A Tale of Two Deez: A Bofades Story", author: "Charles Dickens", price: 18.99, imageUrl: "https://placehold.co/600x400/ffdd57/000000?text=Two+Deez" },
+    { _id: "dn_prod_4", title: "The Great Got-Eem: A Sugondese Tragedy", author: "F. Scott Phitzgerald", price: 21.50, imageUrl: "https://placehold.co/600x400/f14668/ffffff?text=Got-Eem" },
+    { _id: "dn_prod_5", title: "To Kill a Sugma Bird", author: "Harper Lee-gma", price: 14.99, imageUrl: "https://placehold.co/600x400/b86bff/ffffff?text=Sugma+Bird" },
+    { _id: "dn_prod_6", title: "Pride and Bofades", author: "Jane Hausten", price: 12.95, imageUrl: "https://placehold.co/600x400/ff6b6b/ffffff?text=Bofades" },
+    { _id: "dn_prod_7", title: "1984: The Year of Deez", author: "George R. Well", price: 17.00, imageUrl: "https://placehold.co/600x400/48c774/ffffff?text=1984" },
+    { _id: "dn_prod_8", title: "The Catcher in the Nuts", author: "J.D. Salingon", price: 16.50, imageUrl: "https://placehold.co/600x400/3298dc/ffffff?text=Catcher" },
+    { _id: "dn_prod_9", title: "Moby Deez; or, The Nut", author: "Herman Mel-vil", price: 24.00, imageUrl: "https://placehold.co/600x400/dc3232/ffffff?text=Moby+Deez" },
+    { _id: "dn_prod_10", title: "Don Deez-ote", author: "Miguel deez Cervantes", price: 28.10, imageUrl: "https://placehold.co/600x400/ff9900/ffffff?text=Don+Deez" },
+    { _id: "dn_prod_11", title: "War and Deez", author: "Leo Toll-stoy", price: 33.45, imageUrl: "https://placehold.co/600x400/00d1b2/ffffff?text=War" },
+    { _id: "dn_prod_12", title: "The Adventures of Huckleberry Phitt", author: "Mark Twain-uts", price: 15.99, imageUrl: "https://placehold.co/600x400/6f42c1/ffffff?text=Huck+Phitt" },
+    { _id: "dn_prod_13", title: "Franken-knuts", author: "Mary Shelly", price: 22.00, imageUrl: "https://placehold.co/600x400/fbc02d/000000?text=Franken-knuts", series_name: "Gothic Deez", series_number: 1 },
+    { _id: "dn_prod_14", title: "Dracula: A Bofades Tale", author: "Bram Stoker", price: 18.25, imageUrl: "https://placehold.co/600x400/17a2b8/ffffff?text=Dracula", series_name: "Gothic Deez", series_number: 2 },
+    { _id: "dn_prod_15", title: "The Sugondese Nuts: A Study", author: "Dr. Wilma Knuts", price: 9.99, imageUrl: "https://placehold.co/600x400/fd7e14/ffffff?text=Sugondese" },
+    { _id: "dn_prod_16", title: "Ligma: The Unseen Force", author: "Dr. Howard Z. Knuts", price: 47.80, imageUrl: "https://placehold.co/600x400/e83e8c/ffffff?text=Ligma" },
+    { _id: "dn_prod_17", title: "The Candice Prophecy", author: "Prof. Axelrod", price: 53.00, imageUrl: "https://placehold.co/600x400/28a745/ffffff?text=Candice" },
+    { _id: "dn_prod_18", title: "Journey to the Center of Deez", author: "Jules Verne-uts", price: 23.00, imageUrl: "https://placehold.co/600x400/dc3545/ffffff?text=Journey" },
+    { _id: "dn_prod_19", title: "The Art of Sawkon", author: "Sun Tzu-gma", price: 28.75, imageUrl: "https://placehold.co/600x400/6610f2/ffffff?text=Sawkon" },
+    { _id: "dn_prod_20", title: "Deez Nuts: An Autobiography", author: "A. L. Mentary", price: 31.00, imageUrl: "https://placehold.co/600x400/20c997/ffffff?text=Autobiography", series_name: "Nut Studies", series_number: 1 }
 ];
 
 // --- 2. Cassandra: Demonstrating Denormalization ---
-// We are intentionally storing `user_name` here. In a relational model, you'd only store
-// `user_id` and perform a JOIN. Here, we duplicate the name to make reads faster.
 const sampleReviews = {
-    "prod_1": [ { productId: "prod_1", userName: "Alex", text: "A must-read for any software engineer." } ],
-    "prod_2": [ { productId: "prod_2", userName: "Brenda", text: "Great practical advice." } ]
+    "dn_prod_1": [ { productId: "dn_prod_1", userName: "Alex", text: "Couldn't put it down. A real handful." } ],
+    "dn_prod_2": [ { productId: "dn_prod_2", userName: "Brenda", text: "One does not simply walk into Sawkon." } ],
+    "dn_prod_10": [ { productId: "dn_prod_10", userName: "Wendy", text: "Got 'em! The book was also surprisingly informative." } ],
+    "dn_prod_16": [ { productId: "dn_prod_16", userName: "Mike", text: "A truly mind-boggling condition. Frightening." } ]
 };
 
 // --- 3. Neo4j: The initial state of our graph ---
-// We create some initial purchase relationships to power the recommendation engine.
 const samplePurchases = [
-    { userId: 'user-alex-demo', productId: 'prod_1' },
-    { userId: 'user-alex-demo', productId: 'prod_3' }, // Alex bought prod_1 and prod_3
-    { userId: 'user-brenda-demo', productId: 'prod_1' },
-    { userId: 'user-brenda-demo', productId: 'prod_3' }, // Brenda also bought prod_1 and prod_3
-    { userId: 'user-chris-demo', productId: 'prod_2' },
+    { userId: 'user-alex-demo', productId: 'dn_prod_1' },
+    { userId: 'user-alex-demo', productId: 'dn_prod_9' },
+    { userId: 'user-brenda-demo', productId: 'dn_prod_1' },
+    { userId: 'user-brenda-demo', productId: 'dn_prod_2' },
+    { userId: 'user-chris-demo', productId: 'dn_prod_5' },
+    { userId: 'user-dee-demo', productId: 'dn_prod_15' },
+    { userId: 'user-dee-demo', productId: 'dn_prod_16' },
+    { userId: 'user-dee-demo', productId: 'dn_prod_17' },
+    { userId: 'user-mike-demo', productId: 'dn_prod_12' },
+    { userId: 'user-mike-demo', productId: 'dn_prod_16' },
+    { userId: 'user-phil-demo', productId: 'dn_prod_19' },
+    { userId: 'user-phil-demo', productId: 'dn_prod_6' },
+    { userId: 'user-wendy-demo', productId: 'dn_prod_10' },
+    { userId: 'user-wendy-demo', productId: 'dn_prod_13' },
+    { userId: 'user-wendy-demo', productId: 'dn_prod_8' },
+    { userId: 'user-ben-demo', productId: 'dn_prod_18' }
 ];
-
 
 async function seedPostgres() {
     console.log('Seeding PostgreSQL...');
     await postgresPool.query(`DROP TABLE IF EXISTS users;`);
+    // Re-create the users table
     await postgresPool.query(`
         CREATE TABLE users (
             id VARCHAR(255) PRIMARY KEY,
@@ -46,10 +71,16 @@ async function seedPostgres() {
     `);
     console.log('  - "users" table created.');
 
+    // Added new demo users
     const initialUsers = [
         ['user-alex-demo', 'Alex'],
         ['user-brenda-demo', 'Brenda'],
-        ['user-chris-demo', 'Chris']
+        ['user-chris-demo', 'Chris'],
+        ['user-dee-demo', 'Dee'],
+        ['user-mike-demo', 'Mike'],
+        ['user-phil-demo', 'Phil'],
+        ['user-ben-demo', 'Ben'],
+        ['user-wendy-demo', 'Wendy']
     ];
     for (const user of initialUsers) {
         await postgresPool.query('INSERT INTO users (id, name) VALUES ($1, $2)', user);
@@ -63,7 +94,7 @@ async function seedMongo() {
     const db = mongoClient.db('polyglot_shelf');
     await db.collection('products').deleteMany({});
     await db.collection('products').insertMany(sampleProducts);
-    console.log(`  - Inserted ${sampleProducts.length} products (including one with a flexible schema).`);
+    console.log(`  - Inserted ${sampleProducts.length} products (including flexible schema).`);
     console.log('MongoDB seeding complete.\n');
 }
 
@@ -99,8 +130,7 @@ async function seedCassandra() {
     `);
     console.log('  - "reviews" table ensured.');
     
-    // Clear the table and insert new data
-    await cassandraClient.execute('TRUNCATE polyglot_shelf.reviews');
+    // Insert new data
     const allReviews = Object.values(sampleReviews).flat();
     for (const review of allReviews) {
         const query = 'INSERT INTO polyglot_shelf.reviews (product_id, review_id, user_name, text, created_at) VALUES (?, uuid(), ?, ?, toTimestamp(now()))';
@@ -185,5 +215,3 @@ async function main() {
 }
 
 main();
-
-
